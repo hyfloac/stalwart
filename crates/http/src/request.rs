@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020 Stalwart Labs Ltd <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
  *
  * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-SEL
  */
@@ -16,10 +16,10 @@ use common::{
 };
 use dav::{DavMethod, request::DavRequestHandler};
 use directory::Permission;
-use groupware::DavResourceName;
+use groupware::{DavResourceName, calendar::itip::ItipIngest};
 use http_proto::{
-    DownloadResponse, HttpContext, HttpRequest, HttpResponse, HttpResponseBody, HttpSessionData,
-    JsonProblemResponse, ToHttpResponse, form_urlencoded, request::fetch_body,
+    DownloadResponse, HtmlResponse, HttpContext, HttpRequest, HttpResponse, HttpResponseBody,
+    HttpSessionData, JsonProblemResponse, ToHttpResponse, form_urlencoded, request::fetch_body,
 };
 use hyper::{
     Method, StatusCode, body,
@@ -37,7 +37,7 @@ use jmap::{
     websocket::upgrade::WebSocketUpgrade,
 };
 use jmap_proto::{
-    request::Request,
+    request::{Request, capability::Session},
     types::{blob::BlobId, id::Id},
 };
 use store::dispatch::lookup::KeyValue;
@@ -199,6 +199,26 @@ impl ParseHttp for Server {
                             .upgrade_websocket_connection(req, access_token, session)
                             .await;
                     }
+                    ("session", &Method::GET) => {
+                        return if req.headers().contains_key(header::AUTHORIZATION) {
+                            // Authenticate request
+                            let (_in_flight, access_token) =
+                                self.authenticate_headers(&req, &session, false).await?;
+
+                            self.handle_session_resource(
+                                ctx.resolve_response_url(self).await,
+                                access_token,
+                            )
+                            .await
+                            .map(|s| s.into_http_response())
+                        } else {
+                            Ok(Session::new(
+                                ctx.resolve_response_url(self).await,
+                                &self.core.jmap.capabilities,
+                            )
+                            .into_http_response())
+                        };
+                    }
                     (_, &Method::OPTIONS) => {
                         return Ok(JsonProblemResponse(StatusCode::NO_CONTENT).into_http_response());
                     }
@@ -215,7 +235,7 @@ impl ParseHttp for Server {
                             "DAV",
                             concat!(
                                 "1, 2, 3, access-control, extended-mkcol, calendar-access, ",
-                                "calendar-no-timezone, addressbook"
+                                "calendar-auto-schedule, calendar-no-timezone, addressbook"
                             ),
                         )
                         .with_header(
@@ -241,14 +261,9 @@ impl ParseHttp for Server {
             }
             ".well-known" => match (path.next().unwrap_or_default(), req.method()) {
                 ("jmap", &Method::GET) => {
-                    // Authenticate request
-                    let (_in_flight, access_token) =
-                        self.authenticate_headers(&req, &session, false).await?;
-
-                    return self
-                        .handle_session_resource(ctx.resolve_response_url(self).await, access_token)
-                        .await
-                        .map(|s| s.into_http_response());
+                    return Ok(HttpResponse::new(StatusCode::TEMPORARY_REDIRECT)
+                        .with_no_cache()
+                        .with_location("/jmap/session"));
                 }
                 ("caldav", _) => {
                     return Ok(HttpResponse::new(StatusCode::TEMPORARY_REDIRECT)
@@ -394,7 +409,7 @@ impl ParseHttp for Server {
                                 params.get("token"),
                             ) {
                                 // SPDX-SnippetBegin
-                                // SPDX-FileCopyrightText: 2020 Stalwart Labs Ltd <hello@stalw.art>
+                                // SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
                                 // SPDX-License-Identifier: LicenseRef-SEL
                                 #[cfg(feature = "enterprise")]
                                 (Some("telemetry"), Some("traces"), Some(token))
@@ -419,7 +434,7 @@ impl ParseHttp for Server {
 
                             return match grant_type {
                                 // SPDX-SnippetBegin
-                                // SPDX-FileCopyrightText: 2020 Stalwart Labs Ltd <hello@stalw.art>
+                                // SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
                                 // SPDX-License-Identifier: LicenseRef-SEL
                                 #[cfg(feature = "enterprise")]
                                 GrantType::LiveTracing | GrantType::LiveMetrics => {
@@ -461,6 +476,35 @@ impl ParseHttp for Server {
                         .await?;
 
                     return self.handle_autoconfig_request(&req).await;
+                }
+            }
+            "calendar" => {
+                // Limit anonymous requests
+                self.is_http_anonymous_request_allowed(&session.remote_ip)
+                    .await?;
+
+                if self.core.groupware.itip_http_rsvp_url.is_some()
+                    && req.method() == Method::GET
+                    && path.next().unwrap_or_default() == "rsvp"
+                {
+                    return self
+                        .http_rsvp_handle(
+                            req.uri().query().unwrap_or_default(),
+                            req.headers()
+                                .get(header::ACCEPT_LANGUAGE)
+                                .and_then(|v| v.to_str().ok())
+                                .map(|lang| {
+                                    let lang = lang.split_once(',').map_or(lang, |(l, _)| l);
+                                    lang.split_once(';').map_or(lang, |(l, _)| l)
+                                })
+                                .unwrap_or("en"),
+                        )
+                        .await
+                        .map(|response| {
+                            HtmlResponse::new(response)
+                                .into_http_response()
+                                .with_no_store()
+                        });
                 }
             }
             "autodiscover" => {
@@ -540,7 +584,7 @@ impl ParseHttp for Server {
             #[cfg(feature = "enterprise")]
             "logo.svg" if self.is_enterprise_edition() => {
                 // SPDX-SnippetBegin
-                // SPDX-FileCopyrightText: 2020 Stalwart Labs Ltd <hello@stalw.art>
+                // SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
                 // SPDX-License-Identifier: LicenseRef-SEL
 
                 match self

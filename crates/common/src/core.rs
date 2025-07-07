@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020 Stalwart Labs Ltd <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
  *
  * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-SEL
  */
@@ -269,7 +269,7 @@ impl Server {
         }
 
         // SPDX-SnippetBegin
-        // SPDX-FileCopyrightText: 2020 Stalwart Labs Ltd <hello@stalw.art>
+        // SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
         // SPDX-License-Identifier: LicenseRef-SEL
 
         #[cfg(feature = "enterprise")]
@@ -319,7 +319,7 @@ impl Server {
                 quotas.quota = principal.quota();
 
                 // SPDX-SnippetBegin
-                // SPDX-FileCopyrightText: 2020 Stalwart Labs Ltd <hello@stalw.art>
+                // SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
                 // SPDX-License-Identifier: LicenseRef-SEL
 
                 #[cfg(feature = "enterprise")]
@@ -471,7 +471,7 @@ impl Server {
 
     #[inline(always)]
     pub fn notify_task_queue(&self) {
-        self.inner.ipc.index_tx.notify_one();
+        self.inner.ipc.task_tx.notify_one();
     }
 
     pub async fn total_queued_messages(&self) -> trc::Result<u64> {
@@ -751,6 +751,14 @@ impl Server {
             .count_principals(None, Type::Domain.into(), None)
             .await
             .caused_by(trc::location!())
+    }
+
+    #[cfg(not(feature = "enterprise"))]
+    pub async fn logo_resource(
+        &self,
+        _: &str,
+    ) -> trc::Result<Option<crate::manager::webadmin::Resource<Vec<u8>>>> {
+        Ok(None)
     }
 }
 

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020 Stalwart Labs Ltd <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
  *
  * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-SEL
  */
@@ -281,22 +281,49 @@ impl ValueClass {
                 .write(collection)
                 .write(document_id),
             ValueClass::TaskQueue(task) => match task {
-                TaskQueueClass::IndexEmail { seq, hash } => serializer
-                    .write(*seq)
+                TaskQueueClass::IndexEmail { due, hash } => serializer
+                    .write(*due)
                     .write(account_id)
                     .write(0u8)
                     .write(document_id)
                     .write::<&[u8]>(hash.as_ref()),
                 TaskQueueClass::BayesTrain {
-                    seq,
+                    due,
                     hash,
                     learn_spam,
                 } => serializer
-                    .write(*seq)
+                    .write(*due)
                     .write(account_id)
                     .write(if *learn_spam { 1u8 } else { 2u8 })
                     .write(document_id)
                     .write::<&[u8]>(hash.as_ref()),
+                TaskQueueClass::SendAlarm {
+                    due,
+                    event_id,
+                    alarm_id,
+                } => serializer
+                    .write(*due)
+                    .write(account_id)
+                    .write(3u8)
+                    .write(document_id)
+                    .write(*event_id)
+                    .write(*alarm_id),
+                TaskQueueClass::SendImip { due, is_payload } => {
+                    if !*is_payload {
+                        serializer
+                            .write(*due)
+                            .write(account_id)
+                            .write(4u8)
+                            .write(document_id)
+                    } else {
+                        serializer
+                            .write(u64::MAX)
+                            .write(account_id)
+                            .write(5u8)
+                            .write(document_id)
+                            .write(*due)
+                    }
+                }
             },
             ValueClass::Blob(op) => match op {
                 BlobOp::Reserve { hash, until } => serializer
@@ -565,7 +592,19 @@ impl ValueClass {
                     BLOB_HASH_LEN + U32_LEN * 2 + 2
                 }
             },
-            ValueClass::TaskQueue { .. } => BLOB_HASH_LEN + U64_LEN * 2,
+            ValueClass::TaskQueue(e) => match e {
+                TaskQueueClass::IndexEmail { .. } | TaskQueueClass::BayesTrain { .. } => {
+                    (BLOB_HASH_LEN + U64_LEN * 2) + 1
+                }
+                TaskQueueClass::SendAlarm { .. } => U64_LEN + (U32_LEN * 3) + 1,
+                TaskQueueClass::SendImip { is_payload, .. } => {
+                    if *is_payload {
+                        (U64_LEN * 2) + (U32_LEN * 2) + 1
+                    } else {
+                        U64_LEN + (U32_LEN * 2) + 1
+                    }
+                }
+            },
             ValueClass::Queue(q) => match q {
                 QueueClass::Message(_) => U64_LEN,
                 QueueClass::MessageEvent(_) => U64_LEN * 2,
